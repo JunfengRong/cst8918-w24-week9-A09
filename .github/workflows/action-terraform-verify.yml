@@ -1,4 +1,5 @@
-name: Validate terraform fmt
+name: Validate terraform fmt and validate
+
 on:
   pull_request:
     branches:
@@ -12,41 +13,55 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    name: terraform fmt check
+    name: terraform check
     outputs:
       CHECK_STATUS: "${{ env.CHECK_STATUS }}"
+
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
         with:
           fetch-depth: 2
+
       - name: Fetch changed files
         id: pr_files
         uses: jitterbit/get-changed-files@v1
         with:
           format: "space-delimited"
+
       - name: Configure terraform
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.2.4
+
+      - name: Terraform Init
+        run: terraform -chdir=infrastructure init -backend=false
+
       - name: Validate terraform fmt (added_modified)
         run: |
           set +e
-
           echo "CHECK_STATUS=0" >> $GITHUB_ENV
-
           for changed_file in ${{ steps.pr_files.outputs.added_modified }}; do
-            echo "Checking terraform fmt on ${changed_file}..."
-
             if [[ $changed_file == *.tf ]]; then
+              echo "Checking terraform fmt on ${changed_file}..."
               terraform fmt -check $changed_file
-              FMT_STATUS=$(echo $?)
-
-              if [[ $FMT_STATUS -ne 0 ]]; then
+              if [[ $? -ne 0 ]]; then
                 echo "❌ terraform fmt failed - ${changed_file}" >> $GITHUB_STEP_SUMMARY
                 echo "CHECK_STATUS=1" >> $GITHUB_ENV
               fi
             fi
           done
+
+      - name: Terraform Validate
+        if: always()
+        run: |
+          echo "Running terraform validate..."
+          terraform -chdir=infrastructure validate
+          if [[ $? -ne 0 ]]; then
+            echo "❌ terraform validate failed" >> $GITHUB_STEP_SUMMARY
+            echo "CHECK_STATUS=1" >> $GITHUB_ENV
+          fi
+
       - name: Process check
         if: always()
         run: exit $CHECK_STATUS
