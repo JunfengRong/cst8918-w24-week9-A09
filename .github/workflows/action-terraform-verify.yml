@@ -14,20 +14,9 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     name: terraform check
-    outputs:
-      CHECK_STATUS: "${{ env.CHECK_STATUS }}"
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 2
-
-      - name: Fetch changed files
-        id: pr_files
-        uses: jitterbit/get-changed-files@v1
-        with:
-          format: "space-delimited"
+        uses: actions/checkout@v4
 
       - name: Configure terraform
         uses: hashicorp/setup-terraform@v3
@@ -37,31 +26,32 @@ jobs:
       - name: Terraform Init
         run: terraform -chdir=infrastructure init -backend=false
 
-      - name: Validate terraform fmt (added_modified)
-        run: |
-          set +e
-          echo "CHECK_STATUS=0" >> $GITHUB_ENV
-          for changed_file in ${{ steps.pr_files.outputs.added_modified }}; do
-            if [[ $changed_file == *.tf ]]; then
-              echo "Checking terraform fmt on ${changed_file}..."
-              terraform fmt -check $changed_file
-              if [[ $? -ne 0 ]]; then
-                echo "❌ terraform fmt failed - ${changed_file}" >> $GITHUB_STEP_SUMMARY
-                echo "CHECK_STATUS=1" >> $GITHUB_ENV
-              fi
-            fi
-          done
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
 
       - name: Terraform Validate
-        if: always()
+        id: validate
+        run: terraform -chdir=infrastructure validate
+        continue-on-error: true
+
+      - name: Update Summary & Exit
         run: |
-          echo "Running terraform validate..."
-          terraform -chdir=infrastructure validate
-          if [[ $? -ne 0 ]]; then
-            echo "❌ terraform validate failed" >> $GITHUB_STEP_SUMMARY
-            echo "CHECK_STATUS=1" >> $GITHUB_ENV
+          echo "### Terraform Check Results" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ steps.fmt.outcome }}" == "success" ]]; then
+            echo "✅ Format: Passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Format: Failed (Run 'terraform fmt -recursive' to fix)" >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Process check
-        if: always()
-        run: exit $CHECK_STATUS
+          if [[ "${{ steps.validate.outcome }}" == "success" ]]; then
+            echo "✅ Validate: Passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Validate: Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ steps.fmt.outcome }}" != "success" || "${{ steps.validate.outcome }}" != "success" ]]; then
+            exit 1
+          fi
